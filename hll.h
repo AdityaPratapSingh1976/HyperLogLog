@@ -8,6 +8,7 @@
 #include<vector>
 #include<cstring>
 #include<bitset>
+#include<mutex>
 #include <boost/archive/text_oarchive.hpp>
 #include <boost/archive/text_iarchive.hpp>
 #include<boost/serialization/set.hpp>
@@ -16,16 +17,17 @@
 //Header files contain forward declaration of functions
 //Header files contain definition and forward declared member functions for class
 
-using BUCKET_TYPE = uint16_t;
+using BUCKET_TYPE = int8_t;
 
 template<typename T>
 class hyperloglog{
     private :
-    uint8_t b;  // initial bits for indexing
+    std::mutex mtx;
+    BUCKET_TYPE b;  // initial bits for indexing
     size_t bucket_size;     // final bucket array size  := 2^b
     std::vector<BUCKET_TYPE>bucket;  // bucket array
 
-    double _alpha;
+    double CONSTANT = 0.79402;
     public :
     hyperloglog(uint8_t b); // bit constructor
 
@@ -35,7 +37,7 @@ class hyperloglog{
     hash64(const unsigned char* byte_array, size_t size);   // Hashing function
 
     void 
-    add_element(const T& value);    // Adding Element 
+    AddElem(const T& value);    // Adding Element 
 
     uint64_t
     get_cardinality();  // get approx cardinality of set
@@ -43,28 +45,30 @@ class hyperloglog{
 };
 
 
+
 template<typename T>
 inline 
 hyperloglog<T>::hyperloglog(uint8_t _b): b{_b}{
     assert( _b > 0 && _b <= 29);
-    bucket.resize(1 << _b);
-    bucket_size = (1 << _b);
-    switch ( (1 << _b))
+    bucket_size = (1 << _b); 
+    bucket.resize(bucket_size);
+    switch (bucket_size)
     {
     case 16 : 
-        _alpha = 0.673;
+        CONSTANT = 0.673;
         break;
     case 32 :
-        _alpha = 0.697;
+        CONSTANT = 0.697;
         break;
     case 64 : 
-        _alpha = 0.709;
+        CONSTANT = 0.709;
         break;
     default:
-        _alpha = 0.7213/(1 + 0.7213/(1 << _b));
+        CONSTANT = 0.7213/(1 + 0.7213/(bucket_size));
         break;
     }
     
+   
 }
 
 
@@ -79,13 +83,19 @@ hyperloglog<T>::hash64 (const unsigned char* byte_array, size_t size){
     */
     return XXH64(byte_array,size,0);
 }
-
-
+template<std::size_t N>
+void reverse(std::bitset<N> &b) {
+    for(std::size_t i = 0; i < N/2; ++i) {
+        bool t = b[i];
+        b[i] = b[N-i-1];
+        b[N-i-1] = t;
+    }
+}
 
 template<typename T>
 inline
 void
-hyperloglog<T>::add_element(const T &value){
+hyperloglog<T>::AddElem(const T &value){
     std::stringstream buffer;
     boost::archive::text_oarchive oa(buffer);
 
@@ -97,22 +107,33 @@ hyperloglog<T>::add_element(const T &value){
     uint64_t hash_val = hash64(byte_arr, buff_str.length());    // generate 64bit hash
 
     std::bitset<64> bs(hash_val);
-
-    int idx = 0;
+    reverse(bs);
+    int8_t p1 = 0;
+    size_t idx = 0;
+    
+    /*
+        compute index
+    */
     BUCKET_TYPE lzr = 1;
-    BUCKET_TYPE p2 = 1;
-    for(int i = 63; i >= 64 - b; --i){
+    int8_t p2 = 1;
+    for(int i = p1; i < p1 + b; ++i){
         if(bs[i])idx += p2;
         p2 *= 2;
     }
-
-    for(int i = 0; i < 64; ++i){
+    /*
+        compute value
+    */
+    for(int i = p1 + b; i < 64; ++i){
         if(bs[i] == 0)++lzr;
         else break;
     }
-   
-    bucket[idx] = std::max(lzr, bucket[idx]);
+
+    BUCKET_TYPE val = lzr;
+    mtx.lock();
+    bucket[idx] = std::max(val, bucket[idx]);
+    mtx.unlock();
 }
+
 
 
 template<typename T>
@@ -122,10 +143,9 @@ hyperloglog<T>::get_cardinality(){
     long double pow_sum = 0;
     int v = 0;
     for(int i = 0; i < int(bucket_size); ++i){
-        if(!bucket[i])++v;
         pow_sum += pow(2.0,- bucket[i]);
     }
-    uint64_t raw_estimate = raw_estimate =_alpha * double(bucket_size * bucket_size)/ pow_sum;
+    uint64_t raw_estimate = CONSTANT * double(bucket_size * bucket_size)/ pow_sum;
 
     if(raw_estimate < 5/2 * bucket_size){
         if(v)
