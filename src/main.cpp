@@ -2,6 +2,7 @@
 #include <vector>
 #include <string>
 #include <fstream>
+#include <random>
 #include "../include/fasthash.h"
 #include "../include/hll.h"
 #include "xxHash/xxhash.h"
@@ -13,8 +14,8 @@ uint64_t hash64(const unsigned char *byte_array, size_t size){
 }
 
 int main(){
-    long long int n = 10; // Number of elements to be added
-    for(int sze = 4; sze <= 16; ++sze){
+    long long int n = 1000000; // Number of elements to be added
+    for(int sze = 16; sze <= 16; ++sze){
         cout <<"starting with b = " << sze << endl;
         hyperloglog<int> hll(sze, hash64);
         for(int i = 0; i < n; ++i){
