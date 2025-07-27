@@ -21,13 +21,17 @@ using BUCKET_TYPE = uint8_t;
 using KEY_TYPE = uint64_t;
 
 //extern uint64_t fasthash64(const unsigned char *data, size_t len);
-
+void getbin(uint64_t num){
+    for(int i = 63; i >= 0; --i){
+        std::cout << bool(num & (1LL << i));
+    }std::cout << std::endl;
+}
 template<typename T>
 class hyperloglog{
     private :
     std::mutex                  mtx;                // Mutex for thread safety
-    BUCKET_TYPE                 b{11};              // Initial bits for indexing
-    size_t                      bucket_size;        // Final bucket array size  := 2^b
+    BUCKET_TYPE                 b;            // Initial bits for indexing
+    int                         bucket_size;        // Final bucket array size  := 2^b
     std::vector<BUCKET_TYPE>    bucket;             // Bucket array
     KEY_TYPE                    (* hash64)(const unsigned char *byte_array, size_t size); // Hashing function pointer
     double                      CONSTANT = 0.79402; // Constant for cardinality estimation
@@ -37,7 +41,6 @@ class hyperloglog{
 
     hyperloglog(BUCKET_TYPE b, KEY_TYPE (* hash64)(const unsigned char *byte_array, size_t size)); // bit constructor
 
-   // hyperloglog(BUCKET_TYPE b);
     void 
     AddElem(const T& value);    // Adds element to the set
 
@@ -50,10 +53,11 @@ class hyperloglog{
 
 template<typename T>
 inline 
-hyperloglog<T>::hyperloglog(BUCKET_TYPE _b, KEY_TYPE (* hash64)(const unsigned char *byte_array, size_t size)): b{_b}{
-    assert( _b > 0 && _b <= 18);
+hyperloglog<T>::hyperloglog(BUCKET_TYPE _b, KEY_TYPE (* hash64)(const unsigned char *byte_array, size_t size)){
+    assert( _b >= 4 && _b <= 16);
+    b = _b;
     bucket_size = (1 << _b); 
-    bucket.resize(bucket_size);
+    bucket.resize(bucket_size + 10,0);
     this->hash64 = hash64;
     switch (bucket_size)
     {
@@ -72,12 +76,6 @@ hyperloglog<T>::hyperloglog(BUCKET_TYPE _b, KEY_TYPE (* hash64)(const unsigned c
     }   
 }
 
-// template<typename T>
-// inline 
-// hyperloglog<T>::hyperloglog(BUCKET_TYPE _b, KEY_TYPE (* hash64)(const unsigned char *byte_array, size_t size)): hyperloglog<T>(_b){
-//     this->hash64 = hash64;
-// }
-
 void binreverse(KEY_TYPE &key){
     uint64_t bit = 0;
     for(int i = 0; i < 64; ++i){
@@ -87,10 +85,11 @@ void binreverse(KEY_TYPE &key){
     }
 }
 
-template<std::size_t N>
+template<long unsigned int N>
 void reverse(std::bitset<N> &b) {
-    for(std::size_t i = 0; i < N/2; ++i) {
+    for(uint32_t i = 0; i < N/2; ++i) {
         bool t = b[i];
+        assert(N >=  i + 1);
         b[i] = b[N-i-1];
         b[N-i-1] = t;
     }
@@ -100,55 +99,32 @@ template<typename T>
 inline
 void
 hyperloglog<T>::AddElem(const T &value){
-
+    printf("value of b is %d\n", this->b);
     std::stringstream buffer;
     boost::archive::text_oarchive oa(buffer);
 
     oa << value;    // serialization of data into byte array
     std::string buff_str = buffer.str();
-    unsigned char *byte_arr = new unsigned char[buff_str.length()];
+    unsigned char* byte_arr = new unsigned char[buff_str.length()];
     memcpy(byte_arr, buff_str.c_str(), buff_str.length());
 
     KEY_TYPE hash_val = hash64(byte_arr, buff_str.length());
-    //-------------
-    // binreverse(hash_val);
-    // size_t idx = hash_val & ((1 << b) - 1);
-    // hash_val >>= b; // Remove the bits used for indexing
-    // BUCKET_TYPE lzr = __builtin_clzll(hash_val);
-
-    // mtx.lock();
-    // bucket[idx] = std::max(lzr, bucket[idx]);
-    // mtx.unlock();
-    //-------------
-
-    //------------- 
     std::bitset<64> bs(hash_val);
-    reverse(bs);
-    int8_t p1 = 0;
-    size_t idx = 0;
-    
-    /*
-        compute index
-    */
-    BUCKET_TYPE lzr = 1;
-    int8_t p2 = 1;
-    for(int i = p1; i < p1 + b; ++i){
-        if(bs[i])idx += p2;
-        p2 *= 2;
+    int idx = 0;
+    BUCKET_TYPE val = 1;
+    for(int i = 63; i >= 64 - b; --i){
+        idx += bs[i] * (1LL << (63 - i));
     }
-    /*
-        compute value
-    */
-    for(int i = p1 + b; i < 64; ++i){
-        if(bs[i] == 0)++lzr;
+    for(int i = 63 - b; i >= 0; --i){
+        if(bs[i] == 0)++val;
         else break;
     }
 
-    BUCKET_TYPE val = lzr;
     mtx.lock();
+    assert(int(idx) < bucket_size && idx >=0);
     bucket[idx] = std::max(val, bucket[idx]);
     mtx.unlock();
-    //-------------
+    
     
     delete[] byte_arr;
 }
@@ -161,16 +137,20 @@ int64_t
 hyperloglog<T>::get_cardinality(){
     long double pow_sum = 0;
     int v = 0;
+    
+    auto linearcount() = [&](int v)->double {
+        return bucket_size * log(double(bucket_size)/v);
+    };
+
     for(int i = 0; i < int(bucket_size); ++i){
         pow_sum += pow(2.0,- bucket[i]);
+        if(bucket[i] == 0) ++v;
     }
     int64_t raw_estimate = CONSTANT * double(bucket_size * bucket_size)/ pow_sum;
 
     if(raw_estimate < 5/2 * bucket_size){
-        if(v)
-        raw_estimate = double(bucket_size) * log(double(bucket_size)/v);
-        else 
-        v = raw_estimate;
+        if(v!= 0)
+            raw_estimate = linearcount(v);
     }
     else if(raw_estimate > 1/30 * double(1LL<< 32)){
         raw_estimate = -1 * double(1LL << 32) * log(1 - double(raw_estimate)/(1LL << 32));
