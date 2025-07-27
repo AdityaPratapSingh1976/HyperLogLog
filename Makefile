@@ -35,7 +35,7 @@ $(CODEDIR)/%.o: $(CODEDIR)/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
 
 clean:
-	rm -f $(BINARY) $(OBJ) $(DEP_FILES)
+	rm $(BINARY) $(OBJ) $(DEP_FILES) *.o
 
 # Include the dependency files
 -include $(DEP_FILES)
